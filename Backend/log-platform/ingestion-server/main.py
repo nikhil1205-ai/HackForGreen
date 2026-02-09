@@ -1,17 +1,11 @@
 from fastapi import FastAPI, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
 from datetime import datetime
-from pymongo import MongoClient
-from bson import ObjectId
+import json
 import os
+from typing import List
 
-# MongoDB connection
-MONGO_URI = os.getenv("MONGO_URI")
-client = MongoClient(MONGO_URI)
-db = client["log_platform"]
-collection = db["logs"]
-
-app = FastAPI(title="Log Platform API")
+app = FastAPI(title="Log Platform API (No DB)")
 
 app.add_middleware(
     CORSMiddleware,
@@ -20,46 +14,57 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 🔹 Health check
+LOG_FILE = "logs.json"
+
+# Ensure log file exists
+if not os.path.exists(LOG_FILE):
+    with open(LOG_FILE, "w") as f:
+        json.dump([], f)
+
 @app.get("/")
 def health():
     return {"status": "running"}
 
-# 🔹 Ingest logs (already used by SDK)
+# 🔹 INGEST LOGS
 @app.post("/logs")
 async def receive_logs(request: Request):
     payload = await request.json()
-    logs = payload.get("batch", [])
+    batch = payload.get("batch", [])
 
-    for log in logs:
-        log["received_at"] = datetime.utcnow()
-        collection.insert_one(log)
+    if not batch:
+        return {"status": "ok", "stored": 0}
 
-    return {"status": "ok", "stored": len(logs)}
+    with open(LOG_FILE, "r+") as f:
+        logs = json.load(f)
 
-# 🔹 FETCH LOGS AS JSON ✅ (THIS IS WHAT YOU WANT)
+        for log in batch:
+            log["received_at"] = datetime.utcnow().isoformat()
+            logs.append(log)
+
+        f.seek(0)
+        json.dump(logs, f, indent=2)
+
+    return {"status": "ok", "stored": len(batch)}
+
+# 🔹 FETCH LOGS AS JSON
 @app.get("/logs")
 def get_logs(
     limit: int = Query(50, le=500),
     level: str | None = None,
     appName: str | None = None
 ):
-    query = {}
+    with open(LOG_FILE, "r") as f:
+        logs: List[dict] = json.load(f)
 
+    # Filters
     if level:
-        query["level"] = level.upper()
-
+        logs = [l for l in logs if l.get("level") == level.upper()]
     if appName:
-        query["appName"] = appName
+        logs = [l for l in logs if l.get("appName") == appName]
 
-    logs = collection.find(query).sort("received_at", -1).limit(limit)
-
-    result = []
-    for log in logs:
-        log["_id"] = str(log["_id"])  # ObjectId → string
-        result.append(log)
+    logs = logs[-limit:]  # last N logs
 
     return {
-        "count": len(result),
-        "logs": result
+        "count": len(logs),
+        "logs": logs
     }
