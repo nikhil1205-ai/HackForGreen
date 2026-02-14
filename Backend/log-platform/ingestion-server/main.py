@@ -46,16 +46,19 @@
 
 
 
-from fastapi import FastAPI, Request, Query, HTTPException
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from datetime import datetime
 import json
 import os
 import uuid
-from typing import Optional
+from typing import Optional, List
 
-app = FastAPI(title="HackForGreen Log Ingestion Server")
+app = FastAPI(title="HackForGreen Log Ingestion Server (Pathway Ready)")
 
+# -------------------------------
+# CORS Configuration
+# -------------------------------
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -63,30 +66,41 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-LOG_FILE = "logs.json"
+LOG_FILE = "logs.ndjson"
 
 # Ensure file exists
 if not os.path.exists(LOG_FILE):
-    with open(LOG_FILE, "w") as f:
-        json.dump([], f)
+    open(LOG_FILE, "w").close()
 
 
 # -------------------------------
-# Utility functions
+# Utility Functions
 # -------------------------------
 
-def read_logs():
+def append_log(log: dict):
+    with open(LOG_FILE, "a") as f:
+        f.write(json.dumps(log) + "\n")
+
+
+def read_logs(limit: int = 100) -> List[dict]:
+    logs = []
     with open(LOG_FILE, "r") as f:
-        return json.load(f)
+        lines = f.readlines()
+
+    for line in lines[-limit:]:
+        logs.append(json.loads(line.strip()))
+
+    return logs
 
 
-def write_logs(logs):
+def overwrite_logs(logs: List[dict]):
     with open(LOG_FILE, "w") as f:
-        json.dump(logs, f, indent=2)
+        for log in logs:
+            f.write(json.dumps(log) + "\n")
 
 
 # -------------------------------
-# Health
+# Health Check
 # -------------------------------
 
 @app.get("/")
@@ -95,27 +109,25 @@ def health():
 
 
 # -------------------------------
-# Ingest Logs
+# Ingest Single Log (Pathway Style)
 # -------------------------------
 
-
-
 @app.post("/logs")
-async def ingest_logs(request: Request):
-    payload = await request.json()
-    batch = payload.get("batch", [])
+def ingest_log(log: dict):
+    """
+    Accepts ONE JSON log object.
+    """
 
-    logs = read_logs()
+    # Add metadata
+    log["id"] = str(uuid.uuid4())
+    log["received_at"] = datetime.utcnow().isoformat()
 
-    for log in batch:
-        log["id"] = str(uuid.uuid4())   
-        log["received_at"] = datetime.utcnow().isoformat()
-        logs.append(log)
+    append_log(log)
 
-    write_logs(logs)
-
-    return {"stored": len(batch)}
-
+    return {
+        "message": "Log stored successfully",
+        "id": log["id"]
+    }
 
 
 # -------------------------------
@@ -124,20 +136,20 @@ async def ingest_logs(request: Request):
 
 @app.get("/logs")
 def get_logs(limit: int = 100):
-    logs = read_logs()
+    logs = read_logs(limit)
     return {
         "count": len(logs),
-        "logs": logs[-limit:]
+        "logs": logs
     }
 
 
 # -------------------------------
-# Delete ALL Logs
+# Delete All Logs
 # -------------------------------
 
 @app.delete("/logs")
 def delete_all_logs():
-    write_logs([])
+    open(LOG_FILE, "w").close()
     return {"message": "All logs deleted"}
 
 
@@ -147,31 +159,34 @@ def delete_all_logs():
 
 @app.delete("/logs/{log_id}")
 def delete_log_by_id(log_id: str):
-    logs = read_logs()
+    logs = read_logs(limit=100000)
 
     new_logs = [log for log in logs if log.get("id") != log_id]
 
     if len(new_logs) == len(logs):
         raise HTTPException(status_code=404, detail="Log not found")
 
-    write_logs(new_logs)
+    overwrite_logs(new_logs)
 
     return {"message": f"Log {log_id} deleted"}
 
 
 # -------------------------------
-# Delete Logs by Level (optional)
+# Delete Logs by Level
 # -------------------------------
 
 @app.delete("/logs/level/{level}")
 def delete_by_level(level: str):
-    logs = read_logs()
+    logs = read_logs(limit=100000)
 
-    new_logs = [log for log in logs if log.get("level") != level.upper()]
+    new_logs = [
+        log for log in logs
+        if log.get("level", "").upper() != level.upper()
+    ]
 
     deleted_count = len(logs) - len(new_logs)
 
-    write_logs(new_logs)
+    overwrite_logs(new_logs)
 
     return {
         "deleted": deleted_count,

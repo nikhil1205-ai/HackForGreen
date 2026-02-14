@@ -1,73 +1,123 @@
+# import pathway as pw
+# import requests
+# import time
+
+
+# class LogSchema(pw.Schema):
+#     timestamp: str
+#     level: str
+#     message: str
+
+
+# class HttpLogSubject(pw.io.python.ConnectorSubject):
+
+#     def __init__(self):
+#         super().__init__()
+#         self.seen_ids = set()
+
+#     def run(self):
+#         url = "https://hackforgreen.onrender.com/logs?limit=100"
+
+#         while True:
+#             try:
+#                 resp = requests.get(url, timeout=5)
+#                 resp.raise_for_status()
+#                 data = resp.json()
+#                 logs = data.get("logs", [])
+
+#                 for log in logs:
+#                     log_key = (
+#                         log.get("timestamp", "") +
+#                         log.get("message", "") +
+#                         log.get("level", "")
+#                     )
+
+#                     if log_key not in self.seen_ids:
+#                         self.seen_ids.add(log_key)
+
+#                         print("Emitting new log:", log.get("message"))
+
+#                         self.next(
+#                             timestamp=log.get("timestamp", ""),
+#                             level=log.get("level", "UNKNOWN"),
+#                             message=log.get("message") or ""
+#                         )
+
+
+#             except Exception as e:
+#                 print("Poll error:", e)
+
+#             time.sleep(2)
+
+
+# # Read stream
+# logs = pw.io.python.read(
+#     subject=HttpLogSubject(),
+#     schema=LogSchema
+# )
+
+# pw.debug.compute_and_print(logs, include_id=False)
+
+# pw.run()
+
+
 import pathway as pw
-import requests
-import time
+import json
 
-
-# -------------------------------
-# Schema
-# -------------------------------
-
+# ---------------------------
+# 1️⃣ Define Schema
+# ---------------------------
 class LogSchema(pw.Schema):
     timestamp: str
+    app: str
+    url: str
+    userAgent: str
     level: str
+    type: str
     message: str
+    data: dict
+    id: str
+    received_at: str
 
 
-# -------------------------------
-# Streaming Connector
-# -------------------------------
-
-class HttpLogSubject(pw.io.python.ConnectorSubject):
-
-    def __init__(self):
-        super().__init__()
-        self.seen_ids = set()
-
-    def run(self):
-        url = "https://hackforgreen.onrender.com/logs?limit=100"
-
-        while True:
-            try:
-                print("Polling API...")
-                resp = requests.get(url, timeout=5)
-                print("Status:", resp.status_code)
-
-                data = resp.json()
-                logs = data.get("logs", [])
-                print("Logs received:", len(logs))
-
-                for log in logs:
-                    print("Log ID:", log.get("id"))
-
-                    log_id = log.get("id")
-
-                    if log_id and log_id not in self.seen_ids:
-                        print("New log found:", log_id)
-
-                        self.seen_ids.add(log_id)
-
-                        self.next(
-                            timestamp=log.get("timestamp", ""),
-                            level=log.get("level", "UNKNOWN"),
-                            message=log.get("message", "")
-                        )
-
-            except Exception as e:
-                print("Poll error:", e)
-
-            time.sleep(2)
+# ---------------------------
+# 2️⃣ Response Mapper
+# Extract only "logs" array
+# ---------------------------
+def mapper(response_bytes: bytes) -> bytes:
+    parsed = json.loads(response_bytes.decode())
+    logs = parsed["logs"]   # Extract logs list
+    return json.dumps(logs).encode()
 
 
-
-# -------------------------------
-# Pathway Pipeline
-# -------------------------------
-
-logs = pw.io.python.read(
-    subject=HttpLogSubject(),
-    schema=LogSchema
+# ---------------------------
+# 3️⃣ Read From Your API
+# ---------------------------
+logs_table = pw.io.http.read(
+    url="https://hackforgreen.onrender.com/logs",
+    method="GET",
+    schema=LogSchema,
+    response_mapper=mapper,
+    format="json",
+    autocommit_duration_ms=5000  # fetch every 5 seconds
 )
 
-error_logs = logs.filter(pw.this.level == "ERROR")
 
+# ---------------------------
+# 4️⃣ Filter Only ERROR Logs
+# ---------------------------
+error_logs = logs_table.filter(
+    pw.this.level == "ERROR"
+)
+
+
+# ---------------------------
+# 5️⃣ Print Output to Console
+# ---------------------------
 pw.debug.compute_and_print(error_logs)
+
+
+# ---------------------------
+# 6️⃣ Run Pathway
+# ---------------------------
+pw.run()
