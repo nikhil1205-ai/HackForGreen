@@ -59,25 +59,17 @@ def health():
 # -------------------------------
 
 @app.post("/logs")
-async def ingest_log(log: dict):
-    """
-    Accepts ONE JSON object per request.
-    Compatible with Pathway streaming.
-    """
+async def ingest_log(payload: dict):
 
-    if not isinstance(log, dict):
-        raise HTTPException(status_code=400, detail="Invalid JSON object")
+    if "batch" not in payload or not isinstance(payload["batch"], list):
+        raise HTTPException(status_code=400, detail="Invalid format")
 
-    # Add metadata
-    log["id"] = str(uuid.uuid4())
-    log["received_at"] = datetime.utcnow().isoformat()
+    for log in payload["batch"]:
+        log["id"] = str(uuid.uuid4())
+        log["received_at"] = datetime.utcnow().isoformat()
+        append_log(log)
 
-    append_log(log)
-
-    return {
-        "status": "stored",
-        "log_id": log["id"]
-    }
+    return {"status": "stored", "count": len(payload["batch"])}
 
 
 # -------------------------------

@@ -35,7 +35,7 @@ logs_table = pw.io.http.read(
 # 4️⃣ Filter Only ERROR Logs
 # ---------------------------
 error_logs = logs_table.filter(
-    pw.this.level == "ERROR"
+    pw.this.level == "error"
 )
 
 
