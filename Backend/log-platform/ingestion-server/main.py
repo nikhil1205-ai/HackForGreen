@@ -52,13 +52,11 @@ from datetime import datetime
 import json
 import os
 import uuid
-from typing import Optional, List
+from typing import List
 
-app = FastAPI(title="HackForGreen Log Ingestion Server (Pathway Ready)")
+app = FastAPI(title="HackForGreen Log Ingestion Server (Pathway Compatible)")
 
-# -------------------------------
-# CORS Configuration
-# -------------------------------
+# Enable CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -66,9 +64,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-LOG_FILE = "logs.ndjson"
+LOG_FILE = "logs.ndjson"   # Using NDJSON format
 
-# Ensure file exists
+
+# -------------------------------
+# Ensure log file exists
+# -------------------------------
 if not os.path.exists(LOG_FILE):
     open(LOG_FILE, "w").close()
 
@@ -78,25 +79,18 @@ if not os.path.exists(LOG_FILE):
 # -------------------------------
 
 def append_log(log: dict):
+    """Append single JSON object as one line (NDJSON format)"""
     with open(LOG_FILE, "a") as f:
         f.write(json.dumps(log) + "\n")
 
 
 def read_logs(limit: int = 100) -> List[dict]:
-    logs = []
+    """Read last N logs"""
     with open(LOG_FILE, "r") as f:
         lines = f.readlines()
 
-    for line in lines[-limit:]:
-        logs.append(json.loads(line.strip()))
-
-    return logs
-
-
-def overwrite_logs(logs: List[dict]):
-    with open(LOG_FILE, "w") as f:
-        for log in logs:
-            f.write(json.dumps(log) + "\n")
+    logs = [json.loads(line.strip()) for line in lines if line.strip()]
+    return logs[-limit:]
 
 
 # -------------------------------
@@ -109,14 +103,18 @@ def health():
 
 
 # -------------------------------
-# Ingest Single Log (Pathway Style)
+# Ingest SINGLE Log (Pathway Style)
 # -------------------------------
 
 @app.post("/logs")
-def ingest_log(log: dict):
+async def ingest_log(log: dict):
     """
-    Accepts ONE JSON log object.
+    Accepts ONE JSON object per request.
+    Compatible with Pathway streaming.
     """
+
+    if not isinstance(log, dict):
+        raise HTTPException(status_code=400, detail="Invalid JSON object")
 
     # Add metadata
     log["id"] = str(uuid.uuid4())
@@ -125,8 +123,8 @@ def ingest_log(log: dict):
     append_log(log)
 
     return {
-        "message": "Log stored successfully",
-        "id": log["id"]
+        "status": "stored",
+        "log_id": log["id"]
     }
 
 
@@ -144,7 +142,7 @@ def get_logs(limit: int = 100):
 
 
 # -------------------------------
-# Delete All Logs
+# Delete ALL Logs
 # -------------------------------
 
 @app.delete("/logs")
@@ -159,36 +157,24 @@ def delete_all_logs():
 
 @app.delete("/logs/{log_id}")
 def delete_log_by_id(log_id: str):
-    logs = read_logs(limit=100000)
 
-    new_logs = [log for log in logs if log.get("id") != log_id]
+    with open(LOG_FILE, "r") as f:
+        lines = f.readlines()
 
-    if len(new_logs) == len(logs):
+    new_lines = []
+    deleted = False
+
+    for line in lines:
+        log = json.loads(line.strip())
+        if log.get("id") != log_id:
+            new_lines.append(line)
+        else:
+            deleted = True
+
+    if not deleted:
         raise HTTPException(status_code=404, detail="Log not found")
 
-    overwrite_logs(new_logs)
+    with open(LOG_FILE, "w") as f:
+        f.writelines(new_lines)
 
     return {"message": f"Log {log_id} deleted"}
-
-
-# -------------------------------
-# Delete Logs by Level
-# -------------------------------
-
-@app.delete("/logs/level/{level}")
-def delete_by_level(level: str):
-    logs = read_logs(limit=100000)
-
-    new_logs = [
-        log for log in logs
-        if log.get("level", "").upper() != level.upper()
-    ]
-
-    deleted_count = len(logs) - len(new_logs)
-
-    overwrite_logs(new_logs)
-
-    return {
-        "deleted": deleted_count,
-        "message": f"Deleted all {level.upper()} logs"
-    }
