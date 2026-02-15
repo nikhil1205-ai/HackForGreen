@@ -1,2 +1,3 @@
 Backend/log-platform/myenv
 pathvenv
+Backend/log-platform/ingestion-server/myenv
